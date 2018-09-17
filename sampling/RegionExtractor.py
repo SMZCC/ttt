@@ -3,7 +3,7 @@
 # name: smz
 
 import torch
-from utils import *
+from misc import *
 import numpy as np
 
 

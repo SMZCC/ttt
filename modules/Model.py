@@ -32,8 +32,8 @@ class Model(nn.Module):
     def forward(self, input):
         pass
 
-    def gatherParams(self):
+    def gather_params(self):
         pass
 
-    def restoreParams(self):
+    def restore_params(self):
         pass
