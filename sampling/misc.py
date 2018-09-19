@@ -7,6 +7,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
+import cv2  # 测试函数用
+
 
 def overlap_ratio(rect1, rect2):
     '''
@@ -85,7 +87,15 @@ def change_bbox(bbox, to=None):
             'center'： 以中心为核心的坐标描述方式
             'four': bbox必须是'top-left'形式的,返回以对角形式描述的bbox
             'four->center: four --> center
-        return: 2-dims ndarray  [[], []...],除非没有做任何转变,dim同输入的大小
+
+              four------------
+               ^             |
+               |             \/
+            top-left <---> center
+
+
+    return:
+        2-dims ndarray  [[], []...],除非没有做任何转变,dim同输入的大小
     """
 
     if to is None:
@@ -101,14 +111,14 @@ def change_bbox(bbox, to=None):
         for bbox_ in bbox:
             cent_x, cent_y = bbox_[:2] + bbox_[2:] / 2
             changed_bboxes = np.concatenate([changed_bboxes,
-                                             np.array([[np.ceil(cent_x), np.ceil(cent_y),
+                                             np.array([[np.round(cent_x), np.round(cent_y),
                                                         bbox_[2], bbox_[3]]])], axis=0)
     elif to == 'top-left':  # center --> top-left
         changed_bboxes = np.empty((0, 4))
         for bbox_ in bbox:
             top_x, top_y = bbox_[:2] - bbox_[2:] / 2
             changed_bboxes = np.concatenate([changed_bboxes,
-                                             np.array([[np.ceil(top_x), np.ceil(top_y),
+                                             np.array([[np.round(top_x), np.round(top_y),
                                                         bbox_[2], bbox_[3]]])], axis=0)
     elif to == 'four':   # top-left --> four
         changed_bboxes = np.empty((0, 4))
@@ -116,7 +126,7 @@ def change_bbox(bbox, to=None):
             x2, y2 = bbox_[:2] + bbox_[2:]
             changed_bboxes = np.concatenate([changed_bboxes,
                                              np.array([[bbox_[0], bbox_[1],
-                                                        np.ceil(x2), np.ceil(y2)]])], axis=0)
+                                                        np.round(x2), np.round(y2)]])], axis=0)
     elif to == 'four->center':   # four --> center
         changed_bboxes = np.empty((0, 4))
         for bbox_ in bbox:
@@ -132,46 +142,67 @@ def change_bbox(bbox, to=None):
     return changed_bboxes
 
 
-def filter_samples(prebbox, samples, ratio=1.5):
+def filter_samples(prebbox, samples, ratio=1.6, smz_seq=None):
     """用于过滤掉不符合上一帧结果1.5倍的正样本,可更改
     args:
         prebbox: 上一帧的结果
         samples: 采样的结果
+        smz_seq: 用于测试函数用的
+    returns:
+        prebbox_left_top, holds_4, shows,这三个返回值全部都是left-top类型的bbox
     """
     # change center
-    prebbox_center = change_bbox(prebbox, 'center')
+
+    prebbox_center = change_bbox(prebbox, 'center')    # top-left --> center
     new_width, new_height = prebbox[2:] * ratio
-    prebbox_center[0][2:] = [np.ceil(new_width), np.ceil(new_height)]
-    prebbox_four = change_bbox(prebbox_center, 'four')  # TODO：这里放大bbox的情况可能存在使得bbox超越图像
+    prebbox_center[0][2:] = [np.round(new_width), np.round(new_height)]
+    prebbox_top_left = change_bbox(prebbox_center, 'top-left')
+    prebbox_four = change_bbox(prebbox_top_left, 'four')    #  top-left ---> four
+                                                        # TODO：这里放大bbox的情况可能存在使得bbox超越图像
                                                         # 界限的情况,但是我认为不应该在此处处理这个问题,更应该由
                                                         # 采样部分来解决这个问题,毕竟这里的这个仅仅是为了筛选而用,
                                                         # 而不必进行特征的提取
-    samples_four = change_bbox(samples, 'four')
+    samples_four = change_bbox(samples, 'four')   # top-left --- > four
 
     # compare, holds used to train, shows used to show
-    holds = prebbox_four[:, 0] < samples_four[:, 0]
+    holds = prebbox_four[:, 0] < samples_four[:, 0]   # x1
     holds_1 = samples_four[holds]
-    holds = not holds
+    holds = holds == False
     shows_1 = samples_four[holds]
 
-    holds = prebbox_four[:, 1] < holds_1[:, 1]
+    holds = prebbox_four[:, 1] < holds_1[:, 1]        # y1
     holds_2 = holds_1[holds]
-    holds = not holds
+    holds = holds == False
     shows_2 = holds_1[holds]
 
-    holds = prebbox[:, 2] > holds_2[:, 2]
+    holds = prebbox_four[:, 2] > holds_2[:, 2]             # x2
     holds_3 = holds_2[holds]
-    holds = not holds
+    holds = holds == False
     shows_3 = holds_2[holds]
 
-    holds = prebbox[:, 3] > holds_3[:, 3]
+    holds = prebbox_four[:, 3] > holds_3[:, 3]             # y2
     holds_4 = holds_3[holds]
-    holds = not holds
+    if len(holds_4) == 0:    # 防止一个样本都没有
+        holds_3[:, 3] = prebbox_four[:, 3]
+        holds_4 = holds_3
+
+    holds = holds == False
     shows_4 = holds_3[holds]
+
 
     shows = np.concatenate([shows_1, shows_2, shows_3, shows_4], axis=0)
 
-    return prebbox_four, holds_4, shows
+    # todo: 全部改成top-left
+    prebbox_center = change_bbox(prebbox_four, 'four->center')
+    prebbox_top_left = change_bbox(prebbox_center, 'top-left')
+
+    holds_4 = change_bbox(holds_4, 'four->center')
+    holds_4 = change_bbox(holds_4, 'top-left')
+
+    shows = change_bbox(shows, 'four->center')
+    shows = change_bbox(shows, 'top-left')
+
+    return prebbox_top_left, holds_4, shows
 
 
 def show_samples(image, samples, color='b'):
