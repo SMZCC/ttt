@@ -142,6 +142,73 @@ def change_bbox(bbox, to=None):
     return changed_bboxes
 
 
+class EyeRangeManager(object):
+    """用于限制目光聚焦范围
+            args:
+                prebbox: 上一帧的结果
+                samples: 采样的结果
+                smz_seq: 用于测试对象用的
+            returns:
+                prebbox_four, holds_4, shows,这三个返回值全部都是top-left类型的bbox
+    """
+    def __init__(self, eye_range=1.6):
+        self.eye_range = eye_range
+
+    def __call__(self, prebbox, samples, smz_seq=None):
+        prebbox_center = change_bbox(prebbox, 'center')  # top-left --> center
+        new_width, new_height = prebbox[2:] * self.eye_range
+        prebbox_center[0][2:] = [np.round(new_width), np.round(new_height)]
+        prebbox_top_left = change_bbox(prebbox_center, 'top-left')
+        prebbox_four = change_bbox(prebbox_top_left, 'four')  # top-left ---> four
+        # TODO：这里放大bbox的情况可能存在使得bbox超越图像
+        # 界限的情况,但是我认为不应该在此处处理这个问题,更应该由
+        # 采样部分来解决这个问题,毕竟这里的这个仅仅是为了限制目光范围而用,
+        # 而不必进行特征的提取
+        samples_four = change_bbox(samples, 'four')  # top-left --- > four
+
+        # compare, holds used to train, shows used to show
+        holds = prebbox_four[:, 0] < samples_four[:, 0]  # x1
+        holds_1 = samples_four[holds]
+        holds = holds == False
+        shows_1 = samples_four[holds]
+
+        holds = prebbox_four[:, 1] < holds_1[:, 1]  # y1
+        holds_2 = holds_1[holds]
+        holds = holds == False
+        shows_2 = holds_1[holds]
+
+        holds = prebbox_four[:, 2] > holds_2[:, 2]  # x2
+        holds_3 = holds_2[holds]
+        holds = holds == False
+        shows_3 = holds_2[holds]
+
+        holds = prebbox_four[:, 3] > holds_3[:, 3]  # y2
+        holds_4 = holds_3[holds]
+        if len(holds_4) == 0:  # 防止一个样本都没有
+            holds_3[:, 3] = prebbox_four[:, 3]
+            holds_4 = holds_3
+
+        holds = holds == False
+        shows_4 = holds_3[holds]
+
+        shows = np.concatenate([shows_1, shows_2, shows_3, shows_4], axis=0)
+
+        # todo: 全部改成top-left
+        prebbox_center = change_bbox(prebbox_four, 'four->center')
+        prebbox_top_left = change_bbox(prebbox_center, 'top-left')
+
+        holds_4 = change_bbox(holds_4, 'four->center')
+        holds_4 = change_bbox(holds_4, 'top-left')
+
+        shows = change_bbox(shows, 'four->center')
+        shows = change_bbox(shows, 'top-left')
+
+        return prebbox_top_left, holds_4, shows
+
+    def set_eye_range(self, value):
+        self.eye_range = value
+
+
 def filter_samples(prebbox, samples, ratio=1.6, smz_seq=None):
     """用于过滤掉不符合上一帧结果1.5倍的正样本,可更改
     args:
@@ -149,11 +216,11 @@ def filter_samples(prebbox, samples, ratio=1.6, smz_seq=None):
         samples: 采样的结果
         smz_seq: 用于测试函数用的
     returns:
-        prebbox_left_top, holds_4, shows,这三个返回值全部都是left-top类型的bbox
+        prebbox_four, holds_4, shows,这三个返回值全部都是four类型的bbox
     """
     # change center
 
-    prebbox_center = change_bbox(prebbox, 'center')    # top-left --> center
+    prebbox_center = change_bbox(prebbox.copy(), 'center')    # top-left --> center
     new_width, new_height = prebbox[2:] * ratio
     prebbox_center[0][2:] = [np.round(new_width), np.round(new_height)]
     prebbox_top_left = change_bbox(prebbox_center, 'top-left')
