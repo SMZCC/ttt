@@ -74,7 +74,7 @@ def crop_image(img, bbox, img_size=107, padding=16, valid=False):
         cropped = 128 * np.ones((max_y-min_y, max_x-min_x, 3), dtype='uint8')
         cropped[min_y_val-min_y:max_y_val-min_y, min_x_val-min_x:max_x_val-min_x, :] \
             = img[min_y_val:max_y_val, min_x_val:max_x_val, :]
-    
+
     scaled = imresize(cropped, (img_size, img_size))
     return scaled
 
@@ -86,11 +86,11 @@ def change_bbox(bbox, to=None):
         to: 'top-left':以左上角为核心的坐标描述方式
             'center'： 以中心为核心的坐标描述方式
             'four': bbox必须是'top-left'形式的,返回以对角形式描述的bbox
-            'four->center: four --> center
+            'four->top-left: four --> center
 
-              four------------
-               ^             |
-               |             \/
+              four
+               ^
+               \/
             top-left <---> center
 
 
@@ -127,15 +127,13 @@ def change_bbox(bbox, to=None):
             changed_bboxes = np.concatenate([changed_bboxes,
                                              np.array([[bbox_[0], bbox_[1],
                                                         np.round(x2), np.round(y2)]])], axis=0)
-    elif to == 'four->center':   # four --> center
+    elif to == 'four->top-left':   # four --> top-left
         changed_bboxes = np.empty((0, 4))
         for bbox_ in bbox:
             width = bbox_[2] - bbox_[0]
             height = bbox_[3] - bbox_[1]
-            cent_x = bbox_[0] + width / 2
-            cent_y = bbox_[1] + height / 2
             changed_bboxes = np.concatenate([changed_bboxes,
-                                             np.array([[cent_x, cent_y, width, height]])], axis=0)
+                                             np.array([[bbox_[0], bbox_[1], width, height]])], axis=0)
     else:
         return bbox
 
@@ -155,6 +153,8 @@ class EyeRangeManager(object):
         self.eye_range = eye_range
 
     def __call__(self, prebbox, samples, smz_seq=None):
+
+
         prebbox_center = change_bbox(prebbox, 'center')  # top-left --> center
         new_width, new_height = prebbox[2:] * self.eye_range
         prebbox_center[0][2:] = [np.round(new_width), np.round(new_height)]
@@ -165,43 +165,50 @@ class EyeRangeManager(object):
         # 采样部分来解决这个问题,毕竟这里的这个仅仅是为了限制目光范围而用,
         # 而不必进行特征的提取
         samples_four = change_bbox(samples, 'four')  # top-left --- > four
-
+        samples_four_preserved = samples_four[:].copy()
+        print '0: len(samples_four):', len(samples_four), 'samples_four_preserved:', len(samples_four_preserved)
         # compare, holds used to train, shows used to show
         holds = prebbox_four[:, 0] < samples_four[:, 0]  # x1
-        holds_1 = samples_four[holds]
+        holds_1 = samples_four[holds].copy()
         holds = holds == False
-        shows_1 = samples_four[holds]
+        shows_1 = samples_four[holds].copy()
+
+        print '1: len(samples_four):', len(samples_four), 'samples_four_preserved:', len(samples_four_preserved), 'samples:', len(samples)
 
         holds = prebbox_four[:, 1] < holds_1[:, 1]  # y1
-        holds_2 = holds_1[holds]
+        holds_2 = holds_1[holds].copy()
         holds = holds == False
-        shows_2 = holds_1[holds]
+        shows_2 = holds_1[holds].copy()
+        print '2: len(samples_four):', len(samples_four), 'samples_four_preserved:', len(samples_four_preserved), 'samples:', len(samples)
 
         holds = prebbox_four[:, 2] > holds_2[:, 2]  # x2
-        holds_3 = holds_2[holds]
+        holds_3 = holds_2[holds].copy()
         holds = holds == False
-        shows_3 = holds_2[holds]
+        shows_3 = holds_2[holds].copy()
+
+        print '3: len(samples_four):', len(samples_four), 'samples_four_preserved:', len(samples_four_preserved), 'samples:', len(samples)
 
         holds = prebbox_four[:, 3] > holds_3[:, 3]  # y2
-        holds_4 = holds_3[holds]
+        holds_4 = holds_3[holds].copy()
+
         if len(holds_4) == 0:  # 防止一个样本都没有
-            holds_3[:, 3] = prebbox_four[:, 3]
+            # holds_3[:, 3] = prebbox_four[:, 3]
             holds_4 = holds_3
 
         holds = holds == False
-        shows_4 = holds_3[holds]
+        shows_4 = holds_3[holds].copy()
+
+        print '4: len(samples_four):', len(samples_four), 'samples_four_preserved:', len(samples_four_preserved), 'samples:', len(samples)
 
         shows = np.concatenate([shows_1, shows_2, shows_3, shows_4], axis=0)
 
         # todo: 全部改成top-left
-        prebbox_center = change_bbox(prebbox_four, 'four->center')
-        prebbox_top_left = change_bbox(prebbox_center, 'top-left')
+        prebbox_top_left = change_bbox(prebbox_four, 'four->top-left')
+        holds_4 = change_bbox(holds_4, 'four->top-left')
+        shows = change_bbox(shows, 'four->top-left')
 
-        holds_4 = change_bbox(holds_4, 'four->center')
-        holds_4 = change_bbox(holds_4, 'top-left')
-
-        shows = change_bbox(shows, 'four->center')
-        shows = change_bbox(shows, 'top-left')
+        for holds_4_ in holds_4:
+            assert  holds_4_[3] > 0, 'misc, line:211: h>0'
 
         return prebbox_top_left, holds_4, shows
 
@@ -231,11 +238,12 @@ def filter_samples(prebbox, samples, ratio=1.6, smz_seq=None):
                                                         # 而不必进行特征的提取
     samples_four = change_bbox(samples, 'four')   # top-left --- > four
 
+
     # compare, holds used to train, shows used to show
     holds = prebbox_four[:, 0] < samples_four[:, 0]   # x1
-    holds_1 = samples_four[holds]
+    holds_1 = samples_four[holds].copy()
     holds = holds == False
-    shows_1 = samples_four[holds]
+    shows_1 = samples_four[holds].copy()
 
     holds = prebbox_four[:, 1] < holds_1[:, 1]        # y1
     holds_2 = holds_1[holds]
@@ -260,14 +268,11 @@ def filter_samples(prebbox, samples, ratio=1.6, smz_seq=None):
     shows = np.concatenate([shows_1, shows_2, shows_3, shows_4], axis=0)
 
     # todo: 全部改成top-left
-    prebbox_center = change_bbox(prebbox_four, 'four->center')
-    prebbox_top_left = change_bbox(prebbox_center, 'top-left')
+    prebbox_top_left = change_bbox(prebbox_four, 'four->top-left')
 
-    holds_4 = change_bbox(holds_4, 'four->center')
-    holds_4 = change_bbox(holds_4, 'top-left')
+    holds_4 = change_bbox(holds_4, 'four->top-left')
 
-    shows = change_bbox(shows, 'four->center')
-    shows = change_bbox(shows, 'top-left')
+    shows = change_bbox(shows, 'four->top-left')
 
     return prebbox_top_left, holds_4, shows
 
