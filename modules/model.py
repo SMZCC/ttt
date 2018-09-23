@@ -7,7 +7,7 @@ import torch.nn as nn
 from collections import OrderedDict
 from torch.autograd import Variable
 
-from Layers import LRN
+from layers import LRN
 
 
 class Model(nn.Module):
